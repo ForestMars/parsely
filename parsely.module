@@ -194,19 +194,26 @@ function _parsely_get_pub_date_utc($node) {
  */
 function _parsely_get_section($node) {
   $section_vocabulary = variable_get('parsely_section_vocabulary');
-  if (!module_exists('taxonomy') || $section_vocabulary === NULL)
+  if (!module_exists('taxonomy') || $section_vocabulary === NULL) {
     return 'Uncategorized';
+  }
 
-  $active_terms_query = db_select('taxonomy_index', 't')
-    ->fields('t')
-    ->condition('nid', $node->nid, '=')
+  // Fetch the name of the first term from the given vocabulary that is
+  // associated with the given node.
+  $section_term_query = db_select('taxonomy_index', 'ti');
+  $section_term_query->join('taxonomy_term_data', 'ttd', 'ti.tid=ttd.tid');
+  $section_term_result = $section_term_query->fields('ttd', array('name'))
+    ->condition('ti.nid', $node->nid)
+    ->condition('ttd.vid', $section_vocabulary)
+    ->orderBy('ti.created')
+    ->range(0, 1)
     ->execute();
 
-  $row = $active_terms_query->fetchAssoc();
-  if (isset($row['tid'])) {
-    $term = taxonomy_term_load($row['tid']);
-    return $term->name;
-  } else {
+  if ($section_term_result->rowCount() > 0) {
+    $section_term_name = $section_term_result->fetchField();
+    return $section_term_name;
+  }
+  else {
     return 'Uncategorized';
   }
 }

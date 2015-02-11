@@ -193,29 +193,31 @@ function _parsely_get_pub_date_utc($node) {
  * for sections.
  */
 function _parsely_get_section($node) {
+  $section_name = 'Uncategorized';
   $section_vocabulary = variable_get('parsely_section_vocabulary');
-  if (!module_exists('taxonomy') || $section_vocabulary === NULL) {
-    return 'Uncategorized';
+
+  if (module_exists('taxonomy') && !is_null($section_vocabulary)) {
+    // Fetch the name of the first term from the given vocabulary that is
+    // associated with the given node.
+    $section_term_query = db_select('taxonomy_index', 'ti');
+    $section_term_query->join('taxonomy_term_data', 'ttd', 'ti.tid=ttd.tid');
+    $section_term_result = $section_term_query->fields('ttd', array('name'))
+      ->condition('ti.nid', $node->nid)
+      ->condition('ttd.vid', $section_vocabulary)
+      ->orderBy('ti.created')
+      ->range(0, 1)
+      ->execute();
+
+    if ($section_term_result->rowCount() > 0) {
+      $section_name = $section_term_result->fetchField();
+    }
   }
 
-  // Fetch the name of the first term from the given vocabulary that is
-  // associated with the given node.
-  $section_term_query = db_select('taxonomy_index', 'ti');
-  $section_term_query->join('taxonomy_term_data', 'ttd', 'ti.tid=ttd.tid');
-  $section_term_result = $section_term_query->fields('ttd', array('name'))
-    ->condition('ti.nid', $node->nid)
-    ->condition('ttd.vid', $section_vocabulary)
-    ->orderBy('ti.created')
-    ->range(0, 1)
-    ->execute();
+  // Allow any module to alter the section as it sees fit.
+  // @todo: Consider passing the section term as well, if applicable.
+  drupal_alter('parsely_section', $section_name, $node, $section_vocabulary);
 
-  if ($section_term_result->rowCount() > 0) {
-    $section_term_name = $section_term_result->fetchField();
-    return $section_term_name;
-  }
-  else {
-    return 'Uncategorized';
-  }
+  return $section_name;
 }
 
 function _parsely_get_tags($node) {
@@ -244,6 +246,7 @@ function _parsely_get_tags($node) {
 function _parsely_get_node_metadata() {
   $node = menu_get_object();
 
+  // @todo: Integrate with metatag module and/or support tokens, etc.
   $parsely_meta = array(
     '@context'       => 'http://schema.org',
     '@type'          => 'WebPage',

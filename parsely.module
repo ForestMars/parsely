@@ -329,5 +329,9 @@ function _parsely_get_node_metadata() {
 
   // @todo: Also support the "metadata" key so users can pass in any additional custom data.
 
+  // Allow modules to alter the default metadata for this node.
+  // Should this be more generic (rather than node-specific)?
+  drupal_alter('parsely_node_metadata', $parsely_meta, $node);
+
   return $parsely_meta;
 }

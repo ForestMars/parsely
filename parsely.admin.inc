@@ -61,6 +61,61 @@ function parsely_admin_settings($form, &$form_state) {
   // TODO: Should display warning if taxonomy module isn't available
 
   // Optional settings
+  $form['parsely_metadata'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Metadata Settings'),
+    '#description' => t('Customize the values reported to Parse.ly for each page. Read more about Parse.ly metadata !here.', array('!here' => l('here', 'http://www.parsely.com/docs/integration/metadata/ppage.html'))),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  // Thumbnail image.
+  $logo_url = ltrim(theme_get_setting('logo', variable_get('theme_default')), '/');
+  $logo_url = url($logo_url, array('absolute' => TRUE));
+  $form['parsely_metadata']['parsely_metadata_thumbnail_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('thumbnailUrl'),
+    '#description' => t('An image that will be used to illustrate a page/post in certain Parse.ly dashboard displays.'),
+    '#default_value' => variable_get('parsely_metadata_thumbnail_url', $logo_url),
+    '#maxlength' => 1024,
+  );
+  if (module_exists('token')) {
+    $form['parsely_metadata']['#description'] .= ' ' . t('You can use tokens from the list below to specify dynamic patterns for each metadata item.');
+    // Set up a token browser so admins can use relevant tokens to define
+    // metadata values. Update all textfields in this fieldset accordingly.
+    // Note: The ability to provide token_types param to theme_token_tree_link
+    // was introduced by the token module on 2014-06-19 in v. 7.x-1.5+4-dev.
+    // @see https://www.drupal.org/node/2289203.
+    $token_module_info = system_get_info('module', 'token');
+    $token_version = $token_module_info['version'];
+    if (version_compare($token_version, '7.x-1.5+4-dev', 'ge')) {
+      $theme_function = 'token_tree_link';
+    }
+    else {
+      $theme_function = 'token_tree';
+    }
+    $form['parsely_metadata']['tokens'] = array(
+      '#theme'        => $theme_function,
+      '#token_types'  => array('node'),
+      '#global_types' => TRUE,
+      '#click_insert' => TRUE,
+    );
+
+    foreach (element_children($form['parsely_metadata']) as $field_key) {
+      $field = $form['parsely_metadata'][$field_key];
+      if ($field['#type'] == 'textfield') {
+        // Note: because we're not requiring a minimum number of tokens for
+        // these fields, the only way they can fail validation is if they
+        // include a real token that belongs to a disallowed context.
+        $field['#element_validate'] = array(
+          'token_element_validate',
+        );
+        $field['#token_types'] = array('node');
+        $form['parsely_metadata'][$field_key] = $field;
+      }
+    }
+  }
+
+  // Optional settings
   $form['parsely_optional_settings'] = array(
     '#type' => 'fieldset',
     '#title' => t('Optional Settings'),

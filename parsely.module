@@ -302,23 +302,32 @@ function _parsely_get_tags($node) {
 function _parsely_get_node_metadata() {
   $node = menu_get_object();
 
-  // @todo: Integrate with metatag module and/or support tokens, etc.
+  // @todo: Integrate with metatag module and/or support more tokens, etc.
   $parsely_meta = array(
     '@context'       => 'http://schema.org',
     '@type'          => 'WebPage',
     'articleId'      => _parsely_get_content_id($node),
     'headline'       => $node->title,
     'url'            => _parsely_get_canonical_url($node),
-    'thumbnailUrl'   => 'FIX ME',
     'dateCreated'    => _parsely_get_pub_date_utc($node),
     'articleSection' => _parsely_get_section($node),
     'creator'        => _parsely_get_authors($node),
     'keywords'       => _parsely_get_tags($node),
   );
 
+  if ($thumbnail_url = variable_get('parsely_metadata_thumbnail_url', FALSE)) {
+    $thumbnail_url = token_replace($thumbnail_url, array('node' => $node));
+    if (!empty($thumbnail_url)) {
+      $parsely_meta['thumbnailUrl'] = $thumbnail_url;
+    }
+  }
+
+  // @todo: Allow admins to customize the @type value.
   if ($node->type === 'article') {
     $parsely_meta['@type'] = 'NewsArticle';
   }
+
+  // @todo: Also support the "metadata" key so users can pass in any additional custom data.
 
   return $parsely_meta;
 }

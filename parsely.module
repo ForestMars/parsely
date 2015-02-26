@@ -170,7 +170,10 @@ function _parsely_get_canonical_url($node) {
 }
 
 function _parsely_get_authors($node) {
-  return array($node->name);
+  $authors = array($node->name);
+  drupal_alter('parsely_authors', $authors, $node);
+
+  return $authors;
 }
 
 function _parsely_get_pub_date_utc($node) {

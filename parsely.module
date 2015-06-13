@@ -68,15 +68,16 @@ function parsely_permission() {
  * are authenticated here.
  */
 function parsely_should_add_metas() {
+  // @todo: This needs to work on non-node pages.
   $node = menu_get_object();
   if ($node === NULL) {
     return FALSE;
   }
 
-  if (empty(variable_get('parsely_apikey', ''))) {
+  $parsely_api_key = variable_get('parsely_apikey', '');
+  if (empty($parsely_api_key)) {
     return FALSE;
   }
-
 
   $path = drupal_strtolower(drupal_get_path_alias($_GET['q']));
   if (drupal_match_path($path, implode("\r", parsely_paths_to_ignore()))) {
@@ -169,7 +170,10 @@ function _parsely_get_canonical_url($node) {
 }
 
 function _parsely_get_authors($node) {
-  return array($node->name);
+  $authors = array($node->name);
+  drupal_alter('parsely_authors', $authors, $node);
+
+  return $authors;
 }
 
 function _parsely_get_pub_date_utc($node) {
@@ -188,55 +192,111 @@ function _parsely_get_pub_date_utc($node) {
 }
 
 /**
- * Section is the first active term from the vocabulary we've been told to use
- * for sections.
+ * Attempt to determine the "section" to which a given node belongs.
  */
 function _parsely_get_section($node) {
-  $section_vocabulary = variable_get('parsely_section_vocabulary');
-  if (!module_exists('taxonomy') || $section_vocabulary === NULL)
-    return 'Uncategorized';
+  $section_name = 'Uncategorized';
+  $section_term = NULL;
+  $section_vocabulary_id = variable_get('parsely_section_vocabulary');
 
-  $active_terms_query = db_select('taxonomy_index', 't')
-    ->fields('t')
-    ->condition('nid', $node->nid, '=')
-    ->execute();
+  if (module_exists('taxonomy') && !is_null($section_vocabulary_id)) {
+    // Find the most relevant term from the designated vocab, using the
+    // criterion specified in the module configuration. See
+    // parsely_admin_settings() for an explanation of the supported criteria.
+    $selection_criterion = variable_get('parsely_section_term_criterion', 'first');
 
-  $row = $active_terms_query->fetchAssoc();
-  if (isset($row['tid'])) {
-    $term = taxonomy_term_load($row['tid']);
-    return $term->name;
-  } else {
-    return 'Uncategorized';
+    $section_term_query = db_select('taxonomy_index', 'ti');
+    $section_term_query->join('taxonomy_term_data', 'ttd', 'ti.tid=ttd.tid');
+    $section_term_query->fields('ttd', array('tid'))
+      ->condition('ti.nid', $node->nid)
+      ->condition('ttd.vid', $section_vocabulary_id);
+
+    // "First term" or "Last term."
+    if ($selection_criterion == 'first' || $selection_criterion == 'last') {
+      $sort_direction = ($selection_criterion == 'first') ? 'ASC' : 'DESC';
+      $section_term_query->orderBy('ttd.tid', $sort_direction)
+        ->range(0, 1);
+      $section_term_result = $section_term_query->execute();
+
+      if ($section_term_result->rowCount() > 0) {
+        $section_tid = $section_term_result->fetchField();
+        $section_term = taxonomy_term_load($section_tid);
+      }
+    }
+    // "Highest-level term."
+    elseif ($selection_criterion == 'highest') {
+      $all_terms_result = $section_term_query->orderBy('ttd.tid')
+        ->execute();
+
+      if ($all_terms_result->rowCount() > 0) {
+        $tids = $all_terms_result->fetchCol();
+        $terms = taxonomy_term_load_multiple($tids);
+        // Examine each term and see how many parents it has. We could use
+        // taxonomy_get_tree() to get the depths of every term in the vocab,
+        // but that could be problematic for large vocabs.
+        foreach ($terms as $term) {
+          // Calculate depth by repeatedly calling taxonomy_get_parents(). This
+          // is preferable to calling taxonomy_get_parents_all(), because that
+          // would include all parents of any multi-parent terms, skewing our
+          // generation count. Note that $depth will be "1" for a top-level term
+          // here instead of the conventional "0."
+          $t = $term;
+          $depth = 0;
+          while (!is_null($t)) {
+            $depth++;
+            $parents = taxonomy_get_parents($t->tid);
+            $t = array_pop($parents);
+          }
+          if (!isset($highest_term) || $depth < $highest_term->depth) {
+            $term->depth = $depth;
+            $highest_term = $term;
+          }
+        }
+        $section_term = $highest_term;
+      }
+    }
+    // "Highest-level ancestor."
+    elseif ($selection_criterion == 'ancestor') {
+      $first_term_result = $section_term_query->orderBy('ti.created')
+        ->range(0, 1)
+        ->execute();
+
+      if ($first_term_result->rowCount() > 0) {
+        $first_term_tid = $first_term_result->fetchField();
+        $lineage = taxonomy_get_parents_all($first_term_tid);
+        $section_term = array_pop($lineage);
+      }
+    }
   }
+
+  if (property_exists($section_term, 'name')) {
+    $section_name = $section_term->name;
+  }
+
+  // Allow any module to alter the section name.
+  drupal_alter('parsely_section', $section_name, $node, $section_term);
+
+  return $section_name;
 }
 
 function _parsely_get_tags($node) {
   $supported_vocabularies = variable_get('parsely_tag_vocabularies');
-  if (!module_exists('taxonomy') || $supported_vocabularies === NULL)
+  if (!module_exists('taxonomy') || $supported_vocabularies === NULL) {
     return array();
-
-  // Get a mapping of all the terms in this vocabulary so that we can look up
-  // the name of the active terms by term id
-  $_terms = array();
-  foreach ($supported_vocabularies as $vid) {
-    $_terms = array_merge($_terms, taxonomy_get_tree($vid));
-  }
-  $terms = array();
-  foreach ($_terms as $term) {
-    $terms[$term->tid] = $term->name;
   }
 
-  // Check what vocabulary terms are on the page that is loading
-  $active_terms_query = db_select('taxonomy_index', 't')
-    ->fields('t')
-    ->condition('nid', $node->nid, '=')
+  // Fetch the names of all terms that (a) belong to one of the supported
+  // vocabularies and (b) are associated with the given node.
+  $active_terms_query = db_select('taxonomy_index', 'ti');
+  $active_terms_query->join('taxonomy_term_data', 'ttd', 'ti.tid=ttd.tid');
+  $active_terms_result = $active_terms_query->fields('ttd', array('name'))
+    ->condition('ti.nid', $node->nid)
+    ->condition('ttd.vid', $supported_vocabularies, 'IN')
     ->execute();
 
-  // Build up and return active_terms
   $active_terms = array();
-  while ($row = $active_terms_query->fetchAssoc()) {
-    if (isset($row['tid']))
-      array_push($active_terms, $terms[$row['tid']]);
+  if ($active_terms_result->rowCount() > 0) {
+    $active_terms = $active_terms_result->fetchCol();
   }
 
   return $active_terms;
@@ -245,22 +305,36 @@ function _parsely_get_tags($node) {
 function _parsely_get_node_metadata() {
   $node = menu_get_object();
 
+  // @todo: Integrate with metatag module and/or support more tokens, etc.
   $parsely_meta = array(
     '@context'       => 'http://schema.org',
     '@type'          => 'WebPage',
     'articleId'      => _parsely_get_content_id($node),
     'headline'       => $node->title,
     'url'            => _parsely_get_canonical_url($node),
-    'thumbnailUrl'   => 'FIX ME',
     'dateCreated'    => _parsely_get_pub_date_utc($node),
     'articleSection' => _parsely_get_section($node),
     'creator'        => _parsely_get_authors($node),
     'keywords'       => _parsely_get_tags($node),
   );
 
+  if ($thumbnail_url = variable_get('parsely_metadata_thumbnail_url', FALSE)) {
+    $thumbnail_url = token_replace($thumbnail_url, array('node' => $node));
+    if (!empty($thumbnail_url)) {
+      $parsely_meta['thumbnailUrl'] = $thumbnail_url;
+    }
+  }
+
+  // @todo: Allow admins to customize the @type value.
   if ($node->type === 'article') {
     $parsely_meta['@type'] = 'NewsArticle';
   }
+
+  // @todo: Also support the "metadata" key so users can pass in any additional custom data.
+
+  // Allow modules to alter the default metadata for this node.
+  // Should this be more generic (rather than node-specific)?
+  drupal_alter('parsely_node_metadata', $parsely_meta, $node);
 
   return $parsely_meta;
 }

@@ -3,6 +3,10 @@
 Please note, this module is currently undergoing active development and should
 be considered beta.
 
+## Author
+
+Forest Mars
+
 ## Requirements
 
 The Parse.ly Drupal module requires Drupal version 7.
